@@ -6,7 +6,7 @@ title: Gadget fsslower
 fsslower shows open, read, write and fsync operations slower than a threshold
 
 The following parameters are supported:
-- filesystem: Which filesystem to trace [btrfs, ext4, nfs, xfs]
+- type: Which filesystem to trace [btrfs, ext4, nfs, xfs]
 - minlatency: Min latency to trace, in ms. (default 10)
 
 ### Example CR

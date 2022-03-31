@@ -41,7 +41,7 @@ var fsslowerCmd = &cobra.Command{
 	Short: "Trace open, read, write and fsync operations slower than a threshold",
 	PreRunE: func(cmd *cobra.Command, args []string) error {
 		if fsslowerFilesystem == "" {
-			return utils.WrapInErrMissingArgs("--filesystem")
+			return utils.WrapInErrMissingArgs("--type / -t")
 		}
 
 		found := false
@@ -78,7 +78,7 @@ var fsslowerCmd = &cobra.Command{
 			TraceOutputState: "Started",
 			CommonFlags:      &params,
 			Parameters: map[string]string{
-				"filesystem": fsslowerFilesystem,
+				"type":       fsslowerFilesystem,
 				"minlatency": strconv.FormatUint(uint64(fsslowerMinLatency), 10),
 			},
 		}

@@ -52,7 +52,7 @@ func (f *TraceFactory) Description() string {
 	t := `fsslower shows open, read, write and fsync operations slower than a threshold
 
 The following parameters are supported:
-- filesystem: Which filesystem to trace [%s]
+- type: Which filesystem to trace [%s]
 - minlatency: Min latency to trace, in ms. (default %d)`
 
 	return fmt.Sprintf(t, strings.Join(validFilesystems, ", "), types.MinLatencyDefault)
@@ -120,9 +120,9 @@ func (t *Trace) Start(trace *gadgetv1alpha1.Trace) {
 
 	params := trace.Spec.Parameters
 
-	filesystem, ok := params["filesystem"]
+	filesystem, ok := params["type"]
 	if !ok {
-		trace.Status.OperationError = "missing filesystem"
+		trace.Status.OperationError = "missing filesystem type"
 		return
 	}
 
