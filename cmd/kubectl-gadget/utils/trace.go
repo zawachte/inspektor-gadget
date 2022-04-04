@@ -19,27 +19,34 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"syscall"
 	"text/tabwriter"
 	"time"
 
+	"google.golang.org/grpc"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/transport/spdy"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/client-go/tools/portforward"
 	watchtools "k8s.io/client-go/tools/watch"
 
 	gadgetv1alpha1 "github.com/kinvolk/inspektor-gadget/pkg/apis/gadget/v1alpha1"
 	clientset "github.com/kinvolk/inspektor-gadget/pkg/client/clientset/versioned"
 	"github.com/kinvolk/inspektor-gadget/pkg/k8sutil"
+
+	pb "github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/api"
 )
 
 const (
@@ -914,6 +921,86 @@ func genericStreamsDisplay(
 	return genericStreams(params, results, nil, transform)
 }
 
+func getTraceStream(
+	podname string,
+	trace gadgetv1alpha1.Trace,
+	transform func(line string) string,
+) error {
+	// setup port forwarding
+	stopCh := make(chan struct{}, 1)
+	readyCh := make(chan struct{})
+
+	config, err := KubernetesConfigFlags.ToRESTConfig()
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward",
+		"gadget", podname)
+	hostIP := strings.TrimLeft(config.Host, "https:/")
+
+	transport, upgrader, err := spdy.RoundTripperFor(config)
+	if err != nil {
+		return fmt.Errorf("failed to create rount tripper: %w", err)
+	}
+
+	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost,
+		&url.URL{Scheme: "https", Path: path, Host: hostIP})
+	fw, err := portforward.New(dialer, []string{"0:7500"}, stopCh, readyCh, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create port forwarding: %w", err)
+	}
+
+	defer close(stopCh)
+
+	go func() {
+		fw.ForwardPorts()
+	}()
+
+	<-readyCh
+
+	ports, err := fw.GetPorts()
+	if err != nil {
+		return fmt.Errorf("failed to get ports: %w", err)
+	}
+
+	if len(ports) != 1 {
+		return fmt.Errorf("one port expected. Found %d", len(ports))
+	}
+
+	// run grpc
+	conn, err := grpc.Dial(fmt.Sprintf("localhost:%d", ports[0].Local), grpc.WithInsecure())
+	if err != nil {
+		return fmt.Errorf("fail to dial: %w", err)
+	}
+	defer conn.Close()
+	client := pb.NewGadgetTracerManagerClient(conn)
+
+	namespace := trace.ObjectMeta.Namespace
+	name := trace.ObjectMeta.Name
+
+	stream, err := client.ReceiveStream(context.Background(), &pb.TracerID{
+		Id: fmt.Sprintf("trace_%s_%s", namespace, name),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to receive stream: %w", err)
+	}
+
+	for {
+		line, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error reading stream: %w", err)
+		}
+
+		fmt.Println(transform(line.Line))
+	}
+
+	return nil
+}
+
 func genericStreams(
 	params *CommonFlags,
 	results *gadgetv1alpha1.TraceList,
@@ -922,64 +1009,47 @@ func genericStreams(
 ) error {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	completion := make(chan string)
 
 	client, err := k8sutil.NewClientsetFromConfigFlags(KubernetesConfigFlags)
 	if err != nil {
 		return WrapInErrSetupK8sClient(err)
 	}
 
-	verbose := false
-	// verbose only when not json is used
-	if params.Verbose && params.OutputMode != OutputModeJSON {
-		verbose = true
+	podsByNode := map[string]string{}
+
+	pods, err := client.CoreV1().Pods("gadget").List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		return err
 	}
 
-	config := &PostProcessConfig{
-		Flows:     len(results.Items),
-		OutStream: os.Stdout,
-		ErrStream: os.Stderr,
-		Callback:  callback,
-		Transform: transform,
-		Verbose:   verbose,
+	for _, pod := range pods.Items {
+		podsByNode[pod.Spec.NodeName] = pod.Name
 	}
 
-	postProcess := NewPostProcess(config)
-
-	streamCount := int32(0)
-	for index, i := range results.Items {
-		if params.Node != "" && i.Spec.Node != params.Node {
+	for _, trace := range results.Items {
+		if params.Node != "" && trace.Spec.Node != params.Node {
 			continue
 		}
-		atomic.AddInt32(&streamCount, 1)
-		go func(nodeName, namespace, name string, index int) {
-			cmd := fmt.Sprintf("exec gadgettracermanager -call receive-stream -tracerid trace_%s_%s",
-				namespace, name)
-			postProcess.OutStreams[index].Node = nodeName
-			err := ExecPod(client, nodeName, cmd,
-				postProcess.OutStreams[index], postProcess.ErrStreams[index])
-			if err == nil {
-				completion <- fmt.Sprintf("Trace completed on node %q\n", nodeName)
-			} else {
-				completion <- fmt.Sprintf("Error: failed to receive stream on node %q: %v\n", nodeName, err)
+
+		pod, ok := podsByNode[trace.Spec.Node]
+		if !ok {
+			continue
+		}
+
+		mytrace := trace
+
+		go func() {
+			err := getTraceStream(pod, mytrace, transform)
+			if err != nil {
+				fmt.Printf("error was %s\n", err)
 			}
-		}(i.Spec.Node, i.ObjectMeta.Namespace, i.ObjectMeta.Name, index)
+		}()
+
 	}
 
-	for {
-		select {
-		case <-sigs:
-			if params.OutputMode != OutputModeJSON {
-				fmt.Println("\nTerminating...")
-			}
-			return nil
-		case msg := <-completion:
-			fmt.Printf("%s", msg)
-			if atomic.AddInt32(&streamCount, -1) == 0 {
-				return nil
-			}
-		}
-	}
+	<-sigs
+
+	return nil
 }
 
 // DeleteTracesByGadgetName removes all traces with this gadget name

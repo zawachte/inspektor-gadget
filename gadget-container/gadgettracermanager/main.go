@@ -249,6 +249,11 @@ func main() {
 			log.Fatalf("failed to listen: %v", err)
 		}
 
+		lis2, err := net.Listen("tcp", ":7500")
+		if err != nil {
+			log.Fatalf("failed to listen: %v", err)
+		}
+
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 
@@ -271,6 +276,7 @@ func main() {
 
 		log.Printf("Serving on gRPC socket %s", socketfile)
 		go grpcServer.Serve(lis)
+		go grpcServer.Serve(lis2)
 
 		if controller {
 			go startController(node, tracerManager)
