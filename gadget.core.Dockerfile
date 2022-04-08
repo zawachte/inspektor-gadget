@@ -1,12 +1,13 @@
-# Prepare and build gadget artifacts in a container
+# Dockerfile for Inspektor Gadget CO-RE container image gadgets.
+# This is a reduced gadget container image that supports CO-RE gadgets
+# only, i.e, it doesn't depend on BCC. This image is much smaller than
+# the traditional image and is designed to be used on systems that
+# support BTF (CONFIG_DEBUG_INFO_BTF).
 
 ARG BUILDER_IMAGE=ubuntu:20.04
+ARG BASE_IMAGE=alpine:3.14
 
-# BCC built from the gadget branch in the kinvolk/bcc fork.
-# See BCC section in docs/CONTRIBUTING.md for further details.
-ARG BCC="quay.io/kinvolk/bcc:64a64b4ba0a719fb6b79a4705f29ad5e1fa1e47d-focal-release"
-
-FROM ${BCC} as bcc
+# Prepare and build gadget artifacts in a container
 FROM ${BUILDER_IMAGE} as builder
 
 ARG ENABLE_BTFGEN=false
@@ -46,27 +47,23 @@ RUN set -ex; \
 		BTFHUB=/tmp/btfhub INSPEKTOR_GADGET=/gadget ./btfgen.sh; \
 	fi
 
-# Builder: traceloop
-
-# traceloop built from:
-# https://github.com/kinvolk/traceloop/commit/95857527df8d343a054d3754dc3b77c7c8c274c7
-# See:
-# - https://github.com/kinvolk/traceloop/actions
-# - https://hub.docker.com/r/kinvolk/traceloop/tags
-
-FROM docker.io/kinvolk/traceloop:20211109004128958575 as traceloop
-
 # Main gadget image
+FROM ${BASE_IMAGE}
 
-FROM bcc
-
+# install libseccomp according to the package manager available on the base image
 RUN set -ex; \
-	export DEBIAN_FRONTEND=noninteractive; \
-	apt-get update && \
-	apt-get install -y --no-install-recommends \
-		ca-certificates curl jq wget xz-utils binutils rpm2cpio cpio && \
-		rmdir /usr/src && ln -sf /host/usr/src /usr/src && \
-		rm -f /etc/localtime && ln -sf /host/etc/localtime /etc/localtime
+	if command -v tdnf; then \
+		tdnf install -y libseccomp wget curl; \
+	elif command -v yum; then \
+		yum install -y libseccomp wget curl; \
+	elif command -v apt-get; then \
+		apt-get update && \
+		apt-get install -y seccompwget curl ; \
+	elif command -v apk; then \
+		apk add gcompat libseccomp bash wget curl ; \
+	fi && \
+	rmdir /usr/src || true && ln -sf /host/usr/src /usr/src && \
+	rm -f /etc/localtime && ln -sf /host/etc/localtime /etc/localtime
 
 COPY gadget-container/entrypoint.sh gadget-container/cleanup.sh /
 
@@ -74,8 +71,6 @@ COPY --from=builder /gadget/gadget-container/bin/gadgettracermanager /bin/
 COPY --from=builder /gadget/gadget-container/bin/networkpolicyadvisor /bin/
 
 COPY gadget-container/gadgets/bcck8s /opt/bcck8s/
-
-COPY --from=traceloop /bin/traceloop /bin/
 
 ## Hooks Begins
 
