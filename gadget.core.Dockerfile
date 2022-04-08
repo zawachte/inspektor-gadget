@@ -1,12 +1,7 @@
-# Prepare and build gadget artifacts in a container
-
 ARG BUILDER_IMAGE=ubuntu:20.04
+ARG BASE_IMAGE=alpine:3.14
 
-# BCC built from the gadget branch in the kinvolk/bcc fork.
-# See BCC section in docs/CONTRIBUTING.md for further details.
-ARG BCC="quay.io/kinvolk/bcc:64a64b4ba0a719fb6b79a4705f29ad5e1fa1e47d-focal-release"
-
-FROM ${BCC} as bcc
+# Prepare and build gadget artifacts in a container
 FROM ${BUILDER_IMAGE} as builder
 
 ARG ENABLE_BTFGEN=false
@@ -16,7 +11,7 @@ RUN set -ex; \
 	export DEBIAN_FRONTEND=noninteractive; \
 	apt-get update && \
 	apt-get install -y gcc make ca-certificates git clang \
-		software-properties-common libseccomp-dev llvm && \
+		software-properties-common libseccomp-dev && \
 	add-apt-repository -y ppa:tuxinvader/kernel-build-tools && \
 	apt-add-repository -y ppa:longsleep/golang-backports && \
 	apt-get update && \
@@ -57,16 +52,22 @@ RUN set -ex; \
 FROM docker.io/kinvolk/traceloop:20211109004128958575 as traceloop
 
 # Main gadget image
+FROM ${BASE_IMAGE}
 
-FROM bcc
-
+# install libseccomp according to the package manager available on the base image
 RUN set -ex; \
-	export DEBIAN_FRONTEND=noninteractive; \
-	apt-get update && \
-	apt-get install -y --no-install-recommends \
-		ca-certificates curl jq wget xz-utils binutils rpm2cpio cpio && \
-		rmdir /usr/src && ln -sf /host/usr/src /usr/src && \
-		rm -f /etc/localtime && ln -sf /host/etc/localtime /etc/localtime
+	if command -v tdnf; then \
+		tdnf install -y libseccomp wget curl; \
+	elif command -v yum; then \
+		yum install -y libseccomp wget curl; \
+	elif command -v apt-get; then \
+		apt-get update && \
+		apt-get install -y seccompwget curl ; \
+	elif command -v apk; then \
+		apk add gcompat libseccomp bash wget curl ; \
+	fi && \
+	rmdir /usr/src || true && ln -sf /host/usr/src /usr/src && \
+	rm -f /etc/localtime && ln -sf /host/etc/localtime /etc/localtime
 
 COPY gadget-container/entrypoint.sh gadget-container/cleanup.sh /
 
