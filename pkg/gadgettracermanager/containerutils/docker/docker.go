@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Inspektor Gadget authors
+// Copyright 2019-2022 The Inspektor Gadget authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,51 +19,62 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"strings"
+	"regexp"
 	"time"
 
 	"github.com/docker/docker/client"
+	runtimeclient "github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/runtime-client"
 )
 
 const (
-	DefaultSocketPath = "/run/docker.sock"
-	DefaultTimeout    = 2 * time.Second
+	Name                   = "docker"
+	DefaultEngineAPISocket = "/run/docker.sock"
+	DefaultTimeout         = 2 * time.Second
 )
 
+// DockerClient implements the ContainerRuntimeClient interface but using the
+// Docker Engine API instead of the CRI plugin interface (Dockershim). It was
+// necessary because Dockershim does not always use in the same approach of
+// CRI-O and Containerd. For instance, Dockershim does not provide the container
+// pid1 with the ContainerStatus() call as Containerd and CRI-O do.
 type DockerClient struct {
-	client *client.Client
+	client    *client.Client
+	apiSocket string
 }
 
-func NewDockerClient(path string) (*DockerClient, error) {
+func NewDockerClient(apiSocket string) runtimeclient.ContainerRuntimeClient {
+	return &DockerClient{
+		apiSocket: apiSocket,
+	}
+}
+
+func (c *DockerClient) Initialize() error {
 	cli, err := client.NewClientWithOpts(
 		client.WithAPIVersionNegotiation(),
 		client.WithDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.DialTimeout("unix", path, DefaultTimeout)
+			return net.DialTimeout("unix", c.apiSocket, DefaultTimeout)
 		}),
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &DockerClient{
-		client: cli,
-	}, nil
-}
-
-func (c *DockerClient) Close() error {
-	if c.client != nil {
-		return c.client.Close()
-	}
-
+	c.client = cli
 	return nil
 }
 
 func (c *DockerClient) PidFromContainerID(containerID string) (int, error) {
-	if !strings.HasPrefix(containerID, "docker://") {
-		return -1, fmt.Errorf("invalid CRI %s, it should be docker", containerID)
+	// If ID contains a prefix, it must match the runtime name: "<name>://<ID>"
+	split := regexp.MustCompile(`://`).Split(containerID, -1)
+	if len(split) == 2 {
+		if split[0] != Name {
+			return -1, fmt.Errorf("invalid container runtime %q, it should be %q",
+				containerID, Name)
+		}
+		containerID = split[1]
+	} else {
+		containerID = split[0]
 	}
-
-	containerID = strings.TrimPrefix(containerID, "docker://")
 
 	containerJSON, err := c.client.ContainerInspect(context.Background(), containerID)
 	if err != nil {
@@ -75,4 +86,12 @@ func (c *DockerClient) PidFromContainerID(containerID string) (int, error) {
 	}
 
 	return containerJSON.State.Pid, nil
+}
+
+func (c *DockerClient) Close() error {
+	if c.client != nil {
+		return c.client.Close()
+	}
+
+	return nil
 }

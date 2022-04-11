@@ -1,4 +1,4 @@
-// Copyright 2019-2021 The Inspektor Gadget authors
+// Copyright 2019-2022 The Inspektor Gadget authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,6 +26,10 @@ import (
 	"syscall"
 	"unsafe"
 
+	"github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/containerd"
+	"github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/crio"
+	"github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/docker"
+	runtimeclient "github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/runtime-client"
 	ocispec "github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -72,9 +76,33 @@ uint64_t get_cgroupid(char *path) {
 */
 import "C"
 
-type CRIClient interface {
-	Close() error
-	PidFromContainerID(containerID string) (int, error)
+var ContainerRuntimes = []string{
+	docker.Name,
+	containerd.Name,
+	crio.Name,
+}
+
+func NewContainerRuntimeClient(runtime string) (runtimeclient.ContainerRuntimeClient, error) {
+	var runtimeClient runtimeclient.ContainerRuntimeClient
+
+	switch runtime {
+	case docker.Name:
+		runtimeClient = docker.NewDockerClient(docker.DefaultEngineAPISocket)
+	case containerd.Name:
+		runtimeClient = containerd.NewContainerdClient(containerd.DefaultRuntimeEndpoint)
+	case crio.Name:
+		runtimeClient = crio.NewCrioClient(crio.DefaultRuntimeEndpoint)
+	default:
+		return nil, fmt.Errorf("unknown container runtime: %s (available %s)",
+			runtime, strings.Join(ContainerRuntimes, ", "))
+	}
+
+	err := runtimeClient.Initialize()
+	if err != nil {
+		return nil, err
+	}
+
+	return runtimeClient, nil
 }
 
 func CgroupPathV2AddMountpoint(path string) (string, error) {
