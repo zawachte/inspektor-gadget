@@ -12,31 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package containerd
+package crio
 
 import (
 	"time"
 
-	runtimeclient "github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/containerutils/runtime-client"
+	runtimeclient "github.com/kinvolk/inspektor-gadget/pkg/container-utils/runtime-client"
 )
 
 const (
-	Name                   = "containerd"
-	DefaultRuntimeEndpoint = "/run/containerd/containerd.sock"
+	Name                   = "cri-o"
+	DefaultRuntimeEndpoint = "/run/crio/crio.sock"
 	DefaultTimeout         = 2 * time.Second
 )
 
-type ContainerdClient struct {
+type CrioClient struct {
 	runtimeclient.CRIClient
 }
 
-func NewContainerdClient(endPoint string) (runtimeclient.ContainerRuntimeClient, error) {
+func NewCrioClient(endPoint string) (runtimeclient.ContainerRuntimeClient, error) {
 	criclient, err := runtimeclient.NewCRIClient(Name, endPoint, DefaultTimeout)
 	if err != nil {
 		return nil, err
 	}
 
-	return &ContainerdClient{
+	return &CrioClient{
 		CRIClient: criclient,
 	}, nil
 }
