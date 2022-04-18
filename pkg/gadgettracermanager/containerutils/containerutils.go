@@ -83,26 +83,17 @@ var ContainerRuntimes = []string{
 }
 
 func NewContainerRuntimeClient(runtime string) (runtimeclient.ContainerRuntimeClient, error) {
-	var runtimeClient runtimeclient.ContainerRuntimeClient
-
 	switch runtime {
 	case docker.Name:
-		runtimeClient = docker.NewDockerClient(docker.DefaultEngineAPISocket)
+		return docker.NewDockerClient(docker.DefaultEngineAPISocket)
 	case containerd.Name:
-		runtimeClient = containerd.NewContainerdClient(containerd.DefaultRuntimeEndpoint)
+		return containerd.NewContainerdClient(containerd.DefaultRuntimeEndpoint)
 	case crio.Name:
-		runtimeClient = crio.NewCrioClient(crio.DefaultRuntimeEndpoint)
+		return crio.NewCrioClient(crio.DefaultRuntimeEndpoint)
 	default:
 		return nil, fmt.Errorf("unknown container runtime: %s (available %s)",
 			runtime, strings.Join(ContainerRuntimes, ", "))
 	}
-
-	err := runtimeClient.Initialize()
-	if err != nil {
-		return nil, err
-	}
-
-	return runtimeClient, nil
 }
 
 func CgroupPathV2AddMountpoint(path string) (string, error) {

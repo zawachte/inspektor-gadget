@@ -30,9 +30,6 @@ import (
 // ContainerRuntimeClient defines the the interface to communicate with the
 // different container runtimes.
 type ContainerRuntimeClient interface {
-	// Initialize creates the client to communicate with the container runtime.
-	Initialize() error
-
 	// PidFromContainerID returns the pid1 of the container identified by the
 	// specified ID. In case of errors, it can return -1 if there is any problem
 	// retrieving the container information or parsing the response. Or, 0 if
@@ -54,22 +51,25 @@ type CRIClient struct {
 	client pb.RuntimeServiceClient
 }
 
-func (c *CRIClient) Initialize() error {
+func NewCRIClient(name, endpoint string, timeout time.Duration) (CRIClient, error) {
 	conn, err := grpc.Dial(
-		c.RuntimeEndpoint,
+		endpoint,
 		grpc.WithInsecure(),
 		grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
-			return net.DialTimeout("unix", c.RuntimeEndpoint, c.ConnTimeout)
+			return net.DialTimeout("unix", endpoint, timeout)
 		}),
 	)
 	if err != nil {
-		return err
+		return CRIClient{}, err
 	}
 
-	c.conn = conn
-	c.client = pb.NewRuntimeServiceClient(conn)
-
-	return nil
+	return CRIClient{
+		Name:            name,
+		RuntimeEndpoint: endpoint,
+		ConnTimeout:     timeout,
+		conn:            conn,
+		client:          pb.NewRuntimeServiceClient(conn),
+	}, nil
 }
 
 // parseExtraInfo parses the container extra information returned by

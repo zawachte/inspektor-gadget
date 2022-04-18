@@ -30,12 +30,13 @@ type ContainerdClient struct {
 	runtimeclient.CRIClient
 }
 
-func NewContainerdClient(endPoint string) runtimeclient.ContainerRuntimeClient {
-	return &ContainerdClient{
-		CRIClient: runtimeclient.CRIClient{
-			Name:            Name,
-			RuntimeEndpoint: endPoint,
-			ConnTimeout:     DefaultTimeout,
-		},
+func NewContainerdClient(endPoint string) (runtimeclient.ContainerRuntimeClient, error) {
+	criclient, err := runtimeclient.NewCRIClient(Name, endPoint, DefaultTimeout)
+	if err != nil {
+		return nil, err
 	}
+
+	return &ContainerdClient{
+		CRIClient: criclient,
+	}, nil
 }

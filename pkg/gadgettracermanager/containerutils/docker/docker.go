@@ -42,25 +42,20 @@ type DockerClient struct {
 	apiSocket string
 }
 
-func NewDockerClient(apiSocket string) runtimeclient.ContainerRuntimeClient {
-	return &DockerClient{
-		apiSocket: apiSocket,
-	}
-}
-
-func (c *DockerClient) Initialize() error {
+func NewDockerClient(apiSocket string) (runtimeclient.ContainerRuntimeClient, error) {
 	cli, err := client.NewClientWithOpts(
 		client.WithAPIVersionNegotiation(),
 		client.WithDialContext(func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.DialTimeout("unix", c.apiSocket, DefaultTimeout)
+			return net.DialTimeout("unix", apiSocket, DefaultTimeout)
 		}),
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
-
-	c.client = cli
-	return nil
+	return &DockerClient{
+		client:    cli,
+		apiSocket: apiSocket,
+	}, nil
 }
 
 func (c *DockerClient) PidFromContainerID(containerID string) (int, error) {

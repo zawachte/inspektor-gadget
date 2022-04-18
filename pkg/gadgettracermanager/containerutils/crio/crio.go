@@ -30,12 +30,13 @@ type CrioClient struct {
 	runtimeclient.CRIClient
 }
 
-func NewCrioClient(endPoint string) runtimeclient.ContainerRuntimeClient {
-	return &CrioClient{
-		CRIClient: runtimeclient.CRIClient{
-			Name:            Name,
-			RuntimeEndpoint: endPoint,
-			ConnTimeout:     DefaultTimeout,
-		},
+func NewCrioClient(endPoint string) (runtimeclient.ContainerRuntimeClient, error) {
+	criclient, err := runtimeclient.NewCRIClient(Name, endPoint, DefaultTimeout)
+	if err != nil {
+		return nil, err
 	}
+
+	return &CrioClient{
+		CRIClient: criclient,
+	}, nil
 }
