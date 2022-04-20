@@ -123,7 +123,9 @@ func getIdenticalValue(m map[string]string) string {
 
 // If there are more than one element in the map and the Error/Warning is
 // the same for all the nodes, printTraceFeedback will print it only once.
-func printTraceFeedback(prefix string, m map[string]string, totalNodes int) {
+// If allNodes is true messages will be only printed if all the nodes
+// have the same message.
+func printTraceFeedback(prefix string, m map[string]string, totalNodes int, allNodes bool) {
 	// Do not print `len(m)` times the same message if it's the same from all nodes
 	if len(m) > 1 && len(m) == totalNodes {
 		value := getIdenticalValue(m)
@@ -132,6 +134,10 @@ func printTraceFeedback(prefix string, m map[string]string, totalNodes int) {
 				prefix, WrapInErrRunGadgetOnAllNode(errors.New(value)))
 			return
 		}
+	}
+
+	if allNodes {
+		return
 	}
 
 	for node, msg := range m {
@@ -599,11 +605,13 @@ func waitForCondition(traceID string, conditionFunction func(*gadgetv1alpha1.Tra
 	}
 
 	// We print errors whatever happened.
-	printTraceFeedback("Error", nodeErrors, tracesNumber)
+	printTraceFeedback("Error", nodeErrors, tracesNumber, false)
 
 	// We print warnings only if all trace failed.
 	if len(satisfiedTraces) == 0 {
-		printTraceFeedback("Warn", nodeWarnings, tracesNumber)
+		printTraceFeedback("Warn", nodeWarnings, tracesNumber, false)
+	} else {
+		printTraceFeedback("Warn", nodeWarnings, tracesNumber, true)
 	}
 
 	if err != nil {
