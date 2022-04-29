@@ -59,7 +59,7 @@ if grep -q '^1:name=systemd:.*/crio-[0-9a-f]*\.scope$' /proc/self/cgroup > /dev/
     CRIO=1
 fi
 
-# In the gadget image, /usr/src is a symlink to /host/usr/src (see gadget.Dockerfile).
+# In the gadget image, /usr/src is a symlink to /host/usr/src (see Dockerfile).
 # If the kernel headers are already available on the gadget pod via the symlink,
 # no need to download them.
 if [ "$ID" = "rhcos" ] && [ ! -d "/usr/src/kernels/$KERNEL" ]; then
@@ -108,7 +108,7 @@ if [ "$ID" = "rhcos" ] && [ ! -d "/usr/src/kernels/$KERNEL" ]; then
       rpm2cpio $RPM | cpio --quiet -i
       popd
 
-      # In the gadget image, /usr/src is a symlink to /host/usr/src (see gadget.Dockerfile).
+      # In the gadget image, /usr/src is a symlink to /host/usr/src (see sDockerfile).
       # But in the case of RHCOS, remove the symlink and install files in the container.
       test ! -L /usr/src || rm -f /usr/src
       mkdir -p /usr/src/kernels/
