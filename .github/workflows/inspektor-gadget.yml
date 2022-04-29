@@ -200,6 +200,7 @@ jobs:
         type: [bcc, core]
     env:
       dockerfile: ${{ format('gadget.{0}.Dockerfile', matrix.type) }}
+
     # level: 0
     runs-on: ubuntu-latest
     steps:
@@ -210,7 +211,7 @@ jobs:
       uses: actions/cache@v2
       with:
         path: /tmp/.buildx-cache
-        key: ${{ runner.os }}-single-buildx-${{ hashFiles( ${{ env.dockerfile }}) }}
+        key: ${{ runner.os }}-single-buildx-${{ hashFiles(env.dockerfile) }}
         restore-keys: |
           ${{ runner.os }}-single-buildx
     - name: Login to Container Registry
