@@ -200,7 +200,7 @@ jobs:
         type: [bcc, core]
     env:
       dockerfile: ${{ format('gadget.{0}.Dockerfile', matrix.type) }}
-      tagsuffix: ${matrix.type}
+      tagsuffix: ${{ matrix.type }}
 
     # level: 0
     runs-on: ubuntu-latest
