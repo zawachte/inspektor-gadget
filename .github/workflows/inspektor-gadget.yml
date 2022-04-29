@@ -217,7 +217,7 @@ jobs:
     - name: Login to Container Registry
       uses: docker/login-action@v1
       with:
-        registry: ${{ format('{0}-{1}', secrets.CONTAINER_REGISTRY, matrix.type) }}
+        registry: ${{ secrets.CONTAINER_REGISTRY }}
         username: ${{ secrets.CONTAINER_REGISTRY_USERNAME }}
         password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
     - name: Check out code
@@ -230,6 +230,7 @@ jobs:
         if [ "$IMAGE_TAG" = "main" ]; then
             IMAGE_TAG="latest"
         fi
+        IMAGE_TAG=${IMAGE_TAG}-${matrix.type}
         echo IMAGE_TAG=$IMAGE_TAG >> $GITHUB_ENV
     - name: Build gadget container
       uses: docker/build-push-action@v2
