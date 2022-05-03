@@ -17,10 +17,13 @@ package standard
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
+	"github.com/google/uuid"
 	containercollection "github.com/kinvolk/inspektor-gadget/pkg/container-collection"
 	"github.com/kinvolk/inspektor-gadget/pkg/gadgets"
+
 	"github.com/kinvolk/inspektor-gadget/pkg/gadgets/tcptracer/tracer"
 	"github.com/kinvolk/inspektor-gadget/pkg/gadgets/tcptracer/types"
 	eventtypes "github.com/kinvolk/inspektor-gadget/pkg/types"
@@ -54,10 +57,14 @@ func NewTracer(config *tracer.Config, resolver containercollection.ContainerReso
 		eventCallback(event)
 	}
 
-	baseTracer, err := gadgets.NewStandardTracer(lineCallback,
+	mountNsMapPath := filepath.Join(gadgets.PinPath, uuid.New().String())
+	if err := config.MountnsMap.Pin(mountNsMapPath); err != nil {
+		return nil, err
+	}
+
+	baseTracer, err := gadgets.NewStandardTracer(lineCallback, config.MountnsMap,
 		"/usr/share/bcc/tools/tcptracer",
-		"--json", "--mntnsmap", config.MountnsMap,
-		"--containersmap", "/sys/fs/bpf/gadget/containers")
+		"--json", "--containersmap", "/sys/fs/bpf/gadget/containers")
 	if err != nil {
 		return nil, err
 	}

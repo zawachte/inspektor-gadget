@@ -15,8 +15,6 @@
 package gadgets
 
 import (
-	"fmt"
-
 	"github.com/cilium/ebpf/link"
 	gadgetv1alpha1 "github.com/kinvolk/inspektor-gadget/pkg/apis/gadget/v1alpha1"
 	pb "github.com/kinvolk/inspektor-gadget/pkg/gadgettracermanager/api"
@@ -40,14 +38,6 @@ func TraceName(namespace, name string) string {
 
 func TraceNameFromNamespacedName(n types.NamespacedName) string {
 	return TraceName(n.Namespace, n.Name)
-}
-
-func TracePinPath(namespace, name string) string {
-	return fmt.Sprintf("%s/%s%s", PinPath, MountMapPrefix, TraceName(namespace, name))
-}
-
-func TracePinPathFromNamespacedName(n types.NamespacedName) string {
-	return TracePinPath(n.Namespace, n.Name)
 }
 
 func ContainerSelectorFromContainerFilter(f *gadgetv1alpha1.ContainerFilter) *pb.ContainerSelector {

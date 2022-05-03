@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"sync"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
 	log "github.com/sirupsen/logrus"
 
@@ -145,6 +146,21 @@ func (g *GadgetTracerManager) PublishEvent(tracerID string, line string) error {
 
 	stream.Publish(line)
 	return nil
+}
+
+func (g *GadgetTracerManager) TracerMountNsMap(tracerID string) (*ebpf.Map, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.tracerCollection.TracerMountNsMap(tracerID)
+}
+
+func (g *GadgetTracerManager) ContainersMap() *ebpf.Map {
+	if g.containersMap == nil {
+		return nil
+	}
+
+	return g.containersMap.ContainersMap()
 }
 
 func (g *GadgetTracerManager) AddContainer(_ context.Context, containerDefinition *pb.ContainerDefinition) (*pb.AddContainerResponse, error) {

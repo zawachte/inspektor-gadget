@@ -109,13 +109,22 @@ func (tc *TracerCollection) AddTracer(id string, containerSelector pb.ContainerS
 			KeySize:    8,
 			ValueSize:  4,
 			MaxEntries: MaxContainersPerNode,
-			Pinning:    ebpf.PinByName,
 		}
 		var err error
-		mntnsSetMap, err = ebpf.NewMapWithOptions(mntnsSpec, ebpf.MapOptions{PinPath: tc.pinPath})
+		mntnsSetMap, err = ebpf.NewMap(mntnsSpec)
 		if err != nil {
 			return fmt.Errorf("error creating mntnsset map: %w", err)
 		}
+
+		// TODO: remove the pinned map when the bcc gadgets no
+		// longer require it via the `--mntnsmap` command line flag.
+		if tc.pinPath != "" {
+			path := filepath.Join(tc.pinPath, mntnsSpec.Name)
+			if err := mntnsSetMap.Pin(path); err != nil {
+				return fmt.Errorf("failed to pin mntnsset map: %w", err)
+			}
+		}
+
 		tc.containerCollection.ContainerRangeWithSelector(&containerSelector, func(c *pb.ContainerDefinition) {
 			one := uint32(1)
 			mntnsC := uint64(c.Mntns)
@@ -149,7 +158,7 @@ func (tc *TracerCollection) RemoveTracer(id string) error {
 
 	t.gadgetStream.Close()
 
-	if tc.withEbpf {
+	if tc.withEbpf && tc.pinPath != "" {
 		os.Remove(filepath.Join(tc.pinPath, tc.mapPrefix+id))
 	}
 
@@ -193,4 +202,13 @@ func (tc *TracerCollection) TracerExists(id string) bool {
 }
 
 func (tc *TracerCollection) Close() {
+}
+
+func (tc *TracerCollection) TracerMountNsMap(id string) (*ebpf.Map, error) {
+	t, ok := tc.tracers[id]
+	if !ok {
+		return nil, fmt.Errorf("unknown tracer %q", id)
+	}
+
+	return t.mntnsSetMap, nil
 }
