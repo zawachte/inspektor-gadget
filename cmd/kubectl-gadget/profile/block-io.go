@@ -17,6 +17,9 @@ package profile
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/signal"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -33,53 +36,26 @@ var biolatencyTraceConfig = &utils.TraceConfig{
 }
 
 var biolatencyCmd = &cobra.Command{
-	Use:   "block-io",
-	Short: "Analyze block I/O performance through a latency distribution",
-}
-
-var biolatencyStartCmd = &cobra.Command{
-	Use:          "start",
-	Short:        "Start monitor the block device I/O (disk I/O) and record the distribution of I/O latency (time)",
-	RunE:         runBiolatencyStart,
+	Use:          "block-io",
+	Short:        "Analyze block I/O performance through a latency distribution",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
-	PreRunE: func(cmd *cobra.Command, args []string) error {
-		// Biolatency does not support filtering so we need to avoid adding
-		// the default namespace configured in the kubeconfig file.
-		if params.Namespace != "" && !params.NamespaceOverridden {
-			params.Namespace = ""
-		}
-		return nil
-	},
-}
-
-var biolatencyStopCmd = &cobra.Command{
-	Use:          "stop <trace-id>",
-	Short:        "Stop monitoring and generate a report (a histogram graph) with the distribution of block device I/O latency",
-	RunE:         runBiolatencyStop,
-	SilenceUsage: true,
-}
-
-var biolatencyListCmd = &cobra.Command{
-	Use:          "list",
-	Short:        "List the currently running biolatency traces",
-	RunE:         runBiolatencyList,
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
+	RunE:         runBiolatency,
 }
 
 func init() {
-	biolatencyCmd.AddCommand(biolatencyStartCmd)
-	biolatencyCmd.AddCommand(biolatencyStopCmd)
-	biolatencyCmd.AddCommand(biolatencyListCmd)
-
 	ProfilerCmd.AddCommand(biolatencyCmd)
 
-	// Common flags are meaningless for list and stop sub-commands
-	utils.AddCommonFlags(biolatencyStartCmd, &params)
+	utils.AddCommonFlags(biolatencyCmd, &params)
 }
 
-func runBiolatencyStart(cmd *cobra.Command, args []string) error {
+func runBiolatency(cmd *cobra.Command, args []string) error {
+	// Biolatency does not support filtering so we need to avoid adding
+	// the default namespace configured in the kubeconfig file.
+	if params.Namespace != "" && !params.NamespaceOverridden {
+		params.Namespace = ""
+	}
+
 	if params.Node == "" {
 		return utils.WrapInErrMissingArgs("--node")
 	}
@@ -90,18 +66,23 @@ func runBiolatencyStart(cmd *cobra.Command, args []string) error {
 		return utils.WrapInErrRunGadget(err)
 	}
 
-	fmt.Printf("%s\n", traceID)
+	defer utils.DeleteTrace(traceID)
 
-	return nil
-}
-
-func runBiolatencyStop(cmd *cobra.Command, args []string) error {
-	if len(args) != 1 {
-		return utils.WrapInErrMissingArgs("<trace-id>")
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	if params.Timeout != 0 {
+		go func() {
+			time.Sleep(time.Duration(params.Timeout) * time.Second)
+			c <- os.Interrupt
+		}()
+	} else {
+		fmt.Printf("Tracing block device I/O... Hit Ctrl-C to end")
 	}
-	traceID := args[0]
 
-	err := utils.SetTraceOperation(traceID, "stop")
+	<-c
+
+	fmt.Println()
+	err = utils.SetTraceOperation(traceID, "stop")
 	if err != nil {
 		return utils.WrapInErrStopGadget(err)
 	}
@@ -115,21 +96,11 @@ func runBiolatencyStop(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	defer utils.DeleteTrace(traceID)
-
 	err = utils.PrintTraceOutputFromStatus(traceID,
 		biolatencyTraceConfig.TraceOutputState, displayResultsCallback)
 	if err != nil {
 		return utils.WrapInErrGetGadgetOutput(err)
 	}
 
-	return nil
-}
-
-func runBiolatencyList(cmd *cobra.Command, args []string) error {
-	err := utils.PrintAllTraces(biolatencyTraceConfig)
-	if err != nil {
-		return utils.WrapInErrListGadgetTraces(err)
-	}
 	return nil
 }
