@@ -70,13 +70,13 @@ type command struct {
 }
 
 var deployInspektorGadget *command = &command{
-	name:           "Deploy Inspektor Gadget",
+	name:           "DeployInspektorGadget",
 	cmd:            "$KUBECTL_GADGET deploy $GADGET_IMAGE_FLAG | kubectl apply -f -",
 	expectedRegexp: "gadget created",
 }
 
 var waitUntilInspektorGadgetPodsDeployed *command = &command{
-	name: "Wait until the gadget pods are started",
+	name: "WaitForGadgetPods",
 	cmd: `
 	for POD in $(sleep 5; kubectl get pod -n gadget -l k8s-app=gadget -o name) ; do
 		kubectl wait --timeout=30s -n gadget --for=condition=ready $POD
@@ -89,7 +89,7 @@ var waitUntilInspektorGadgetPodsDeployed *command = &command{
 }
 
 var deploySPO *command = &command{
-	name: "Deploy Security Profiles Operator (SPO)",
+	name: "DeploySecurityProfilesOperator",
 	// The security-profiles-operator-webhook deployment is not part of the
 	// yaml but created by SPO. We cannot use kubectl-wait before it is
 	// created, see also:
@@ -120,19 +120,19 @@ var deploySPO *command = &command{
 
 func waitUntilInspektorGadgetPodsInitialized(initialDelay int) *command {
 	return &command{
-		name: "Wait until Inspektor Gadget is initialised",
+		name: "WaitForInspektorGadgetInit",
 		cmd:  fmt.Sprintf("sleep %d", initialDelay),
 	}
 }
 
 var cleanupInspektorGadget *command = &command{
-	name:    "cleanup gadget deployment",
+	name:    "CleanupInspektorGadget",
 	cmd:     "$KUBECTL_GADGET undeploy",
 	cleanup: true,
 }
 
 var cleanupSPO *command = &command{
-	name: "Remove Security Profiles Operator (SPO)",
+	name: "RemoveSecurityProfilesOperator",
 	cmd: `
 	kubectl delete seccompprofile -n security-profiles-operator --all
 	kubectl delete -f https://raw.githubusercontent.com/kubernetes-sigs/security-profiles-operator/main/deploy/operator.yaml
@@ -264,30 +264,35 @@ func kill(cmd *exec.Cmd, wait bool) error {
 func (c *command) runWithoutTest() error {
 	c.createExecCmd()
 
-	fmt.Printf("Run command: %s\n", c.cmd)
+	fmt.Printf("Run command(%s):\n%s\n", c.name, c.cmd)
 	err := c.command.Run()
-	fmt.Printf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+	fmt.Printf("Command returned(%s):\n%s\n%s\n",
+		c.name, c.stderr.String(), c.stdout.String())
 
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to run command(%s): %w", c.name, err)
 	}
 
-	return c.verifyOutput()
+	if err = c.verifyOutput(); err != nil {
+		return fmt.Errorf("invalid command output(%s): %w", c.name, err)
+	}
+
+	return nil
 }
 
 // startWithoutTest starts the command, this is thought to be used in TestMain().
 func (c *command) startWithoutTest() error {
 	if c.started {
-		fmt.Printf("Warn: trying to start a command but it is not running: %s\n", c.cmd)
+		fmt.Printf("Warn(%s): trying to start command but it was already started\n", c.name)
 		return nil
 	}
 
 	c.createExecCmd()
 
-	fmt.Printf("Start command: %s\n", c.cmd)
+	fmt.Printf("Start command(%s): %s\n", c.name, c.cmd)
 	err := c.command.Start()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to start command(%s): %w", c.name, err)
 	}
 
 	c.started = true
@@ -299,16 +304,17 @@ func (c *command) startWithoutTest() error {
 // this is thought to be used in TestMain().
 func (c *command) waitWithoutTest() error {
 	if !c.started {
-		fmt.Printf("Warn: trying to wait for a command that has not been started yet: %s\n", c.cmd)
+		fmt.Printf("Warn(%s): trying to wait for a command that has not been started yet\n", c.name)
 		return nil
 	}
 
-	fmt.Printf("Wait for command: %s\n", c.cmd)
+	fmt.Printf("Wait for command(%s)\n", c.name)
 	err := c.command.Wait()
-	fmt.Printf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+	fmt.Printf("Command returned(%s):\n%s\n%s\n",
+		c.name, c.stderr.String(), c.stdout.String())
 
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to wait for command(%s): %w", c.name, err)
 	}
 
 	c.started = false
@@ -320,8 +326,13 @@ func (c *command) waitWithoutTest() error {
 // or runWithoutTest() and we do not need to verify its output. This is thought
 // to be used in TestMain().
 func (c *command) killWithoutTest() error {
-	fmt.Printf("Kill command: %s\n", c.cmd)
-	return kill(c.command, c.started)
+	fmt.Printf("Kill command(%s)\n", c.name)
+
+	if err := kill(c.command, c.started); err != nil {
+		return fmt.Errorf("failed to kill command(%s): %w", c.name, err)
+	}
+
+	return nil
 }
 
 // run runs the command on the given as parameter test.
@@ -333,17 +344,18 @@ func (c *command) run(t *testing.T) {
 		return
 	}
 
-	t.Logf("Run command: %s\n", c.cmd)
+	t.Logf("Run command(%s):\n%s\n", c.name, c.cmd)
 	err := c.command.Run()
-	t.Logf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+	t.Logf("Command returned(%s):\n%s\n%s\n",
+		c.name, c.stderr.String(), c.stdout.String())
 
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to run command(%s): %s\n", c.name, err)
 	}
 
 	err = c.verifyOutput()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("invalid command output(%s): %s\n", c.name, err)
 	}
 }
 
@@ -351,14 +363,14 @@ func (c *command) run(t *testing.T) {
 // wait it using stop().
 func (c *command) start(t *testing.T) {
 	if c.started {
-		t.Logf("Warn: trying to start command but it was already started: %s\n", c.cmd)
+		t.Logf("Warn(%s): trying to start command but it was already started\n", c.name)
 		return
 	}
 
-	t.Logf("Start command: %s\n", c.cmd)
+	t.Logf("Start command(%s): %s\n", c.name, c.cmd)
 	err := c.command.Start()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to start command(%s): %s\n", c.name, err)
 	}
 
 	c.started = true
@@ -370,21 +382,22 @@ func (c *command) start(t *testing.T) {
 // Cmd output is then checked with regard to expectedString and expectedRegexp
 func (c *command) stop(t *testing.T) {
 	if !c.started {
-		t.Logf("Warn: trying to stop command but it was not started: %s\n", c.cmd)
+		t.Logf("Warn(%s): trying to stop command but it was not started\n", c.name)
 		return
 	}
 
-	t.Logf("Stop command: %s\n", c.cmd)
+	t.Logf("Stop command(%s)\n", c.name)
 	err := kill(c.command, c.started)
-	t.Logf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+	t.Logf("Command returned(%s):\n%s\n%s\n",
+		c.name, c.stderr.String(), c.stdout.String())
 
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to stop command(%s): %s\n", c.name, err)
 	}
 
 	err = c.verifyOutput()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("invalid command output(%s): %s\n", c.name, err)
 	}
 
 	c.started = false
@@ -418,7 +431,7 @@ EOF
 `, namespace, cmd)
 
 	return &command{
-		name:           "Run test-pod",
+		name:           "RunTestPod",
 		cmd:            cmdStr,
 		expectedString: "pod/test-pod created\n",
 	}
@@ -435,7 +448,7 @@ func generateTestNamespaceName(namespace string) string {
 // name is given as parameter.
 func createTestNamespaceCommand(namespace string) *command {
 	return &command{
-		name: "Create test namespace",
+		name: "CreateTestNamespace",
 		cmd: fmt.Sprintf(`kubectl create namespace %s --dry-run=client -o yaml | \
 			sed  '/^metadata:/a\ \ labels: {"%s":"%s"}' | kubectl apply -f - `,
 			namespace, namespaceLabelKey, namespaceLabelValue),
@@ -447,7 +460,7 @@ func createTestNamespaceCommand(namespace string) *command {
 // name is given as parameter.
 func deleteTestNamespaceCommand(namespace string) *command {
 	return &command{
-		name:           "Delete test namespace",
+		name:           "DeleteTestNamespace",
 		cmd:            fmt.Sprintf("kubectl delete ns %s", namespace),
 		expectedString: fmt.Sprintf("namespace \"%s\" deleted\n", namespace),
 		cleanup:        true,
@@ -458,7 +471,7 @@ func deleteTestNamespaceCommand(namespace string) *command {
 // name is given as parameter.
 func deleteRemainingNamespacesCommand() *command {
 	return &command{
-		name: "Delete remaining test namespace",
+		name: "DeleteRemainingTestNamespace",
 		cmd: fmt.Sprintf("kubectl delete ns -l %s=%s",
 			namespaceLabelKey, namespaceLabelValue),
 		cleanup: true,
@@ -469,7 +482,7 @@ func deleteRemainingNamespacesCommand() *command {
 // the given as parameter namespace is ready.
 func waitUntilTestPodReadyCommand(namespace string) *command {
 	return &command{
-		name:           "Wait until test pod ready",
+		name:           "WaitForTestPod",
 		cmd:            fmt.Sprintf("kubectl wait pod --for condition=ready -n %s test-pod", namespace),
 		expectedString: "pod/test-pod condition met\n",
 	}
