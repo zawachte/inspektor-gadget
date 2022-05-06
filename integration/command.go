@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os/exec"
@@ -25,6 +26,11 @@ import (
 	"testing"
 
 	"github.com/kr/pretty"
+)
+
+const (
+	namespaceLabelKey   string = "scope"
+	namespaceLabelValue string = "ig-integration-tests"
 )
 
 type command struct {
@@ -145,6 +151,16 @@ func (c *command) createExecCmd() {
 	cmd.Stdout = &c.stdout
 	cmd.Stderr = &c.stderr
 
+	// To be able to kill the process of /bin/sh and its child (the process of
+	// c.cmd), we need to send the termination signal to their process group ID
+	// (PGID). However, child processes get the same PGID as their parents by
+	// default, so in order to avoid killing also the integration tests process,
+	// we set the fields Setpgid and Pgid of syscall.SysProcAttr before
+	// executing /bin/sh. Doing so, the PGID of /bin/sh (and its children)
+	// will be set to its process ID, see:
+	// https://cs.opensource.google/go/go/+/refs/tags/go1.17.8:src/syscall/exec_linux.go;l=32-34.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: 0}
+
 	c.command = cmd
 }
 
@@ -194,6 +210,120 @@ func (c *command) verifyOutput() error {
 	return nil
 }
 
+// kill kills a command by sending SIGKILL because we want to stop the process
+// immediatly and avoid that the signal is trapped.
+func kill(cmd *exec.Cmd, wait bool) error {
+	const sig syscall.Signal = syscall.SIGKILL
+
+	// No need to kill, command has not been executed yet or it already exited
+	if cmd == nil || (cmd.ProcessState != nil && cmd.ProcessState.Exited()) {
+		return nil
+	}
+
+	// Given that we set Setpgid, here we just need to send the PID of /bin/sh
+	// (which is the same PGID) as a negative number to syscall.Kill(). As a
+	// result, the signal will be received by all the processes with such PGID,
+	// in our case, the process of /bin/sh and c.cmd.
+	err := syscall.Kill(-cmd.Process.Pid, sig)
+	if err != nil {
+		return err
+	}
+
+	// In some cases, we do not have to wait here because the cmd was executed
+	// with Run(), which already waits. On the contrary, in the case it was
+	// executed with Start(), we need to wait indeed.
+	if wait {
+		err = cmd.Wait()
+		if err == nil {
+			return nil
+		}
+
+		// Verify if the error is about the signal we just sent. In that case,
+		// do not return error, it is what we were expecting.
+		var exiterr *exec.ExitError
+		if ok := errors.As(err, &exiterr); !ok {
+			return err
+		}
+
+		waitStatus, ok := exiterr.Sys().(syscall.WaitStatus)
+		if !ok {
+			return err
+		}
+
+		if waitStatus.Signal() != sig {
+			return err
+		}
+
+		return nil
+	}
+
+	return err
+}
+
+// runWithoutTest runs the command, this is thought to be used in TestMain().
+func (c *command) runWithoutTest() error {
+	c.createExecCmd()
+
+	fmt.Printf("Run command: %s\n", c.cmd)
+	err := c.command.Run()
+	fmt.Printf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+
+	if err != nil {
+		return err
+	}
+
+	return c.verifyOutput()
+}
+
+// startWithoutTest starts the command, this is thought to be used in TestMain().
+func (c *command) startWithoutTest() error {
+	if c.started {
+		fmt.Printf("Warn: trying to start a command but it is not running: %s\n", c.cmd)
+		return nil
+	}
+
+	c.createExecCmd()
+
+	fmt.Printf("Start command: %s\n", c.cmd)
+	err := c.command.Start()
+	if err != nil {
+		return err
+	}
+
+	c.started = true
+
+	return nil
+}
+
+// waitWithoutTest waits for a command that was started with startWithoutTest(),
+// this is thought to be used in TestMain().
+func (c *command) waitWithoutTest() error {
+	if !c.started {
+		fmt.Printf("Warn: trying to wait for a command that has not been started yet: %s\n", c.cmd)
+		return nil
+	}
+
+	fmt.Printf("Wait for command: %s\n", c.cmd)
+	err := c.command.Wait()
+	fmt.Printf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
+
+	if err != nil {
+		return err
+	}
+
+	c.started = false
+
+	return nil
+}
+
+// killWithoutTest kills for a command that was started with startWithoutTest()
+// or runWithoutTest() and we do not need to verify its output. This is thought
+// to be used in TestMain().
+func (c *command) killWithoutTest() error {
+	fmt.Printf("Kill command: %s\n", c.cmd)
+	return kill(c.command, c.started)
+}
+
 // run runs the command on the given as parameter test.
 func (c *command) run(t *testing.T) {
 	c.createExecCmd()
@@ -205,7 +335,6 @@ func (c *command) run(t *testing.T) {
 
 	t.Logf("Run command: %s\n", c.cmd)
 	err := c.command.Run()
-
 	t.Logf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
 
 	if err != nil {
@@ -218,22 +347,6 @@ func (c *command) run(t *testing.T) {
 	}
 }
 
-// runWithoutTest runs the command, this is thought to be used in TestMain().
-func (c *command) runWithoutTest() error {
-	fmt.Printf("Run command: %s\n", c.cmd)
-
-	c.createExecCmd()
-	err := c.command.Run()
-
-	fmt.Printf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
-
-	if err != nil {
-		return err
-	}
-
-	return c.verifyOutput()
-}
-
 // start starts the command on the given as parameter test, you need to
 // wait it using stop().
 func (c *command) start(t *testing.T) {
@@ -243,17 +356,6 @@ func (c *command) start(t *testing.T) {
 	}
 
 	t.Logf("Start command: %s\n", c.cmd)
-
-	// To be able to kill the process of /bin/sh and its child (the process of
-	// c.cmd), we need to send the termination signal to their process group ID
-	// (PGID). However, child processes get the same PGID as their parents by
-	// default, so in order to avoid killing also the integration tests process,
-	// we set the fields Setpgid and Pgid of syscall.SysProcAttr before
-	// executing /bin/sh. Doing so, the PGID of /bin/sh (and its children)
-	// will be set to its process ID, see:
-	// https://cs.opensource.google/go/go/+/refs/tags/go1.17.8:src/syscall/exec_linux.go;l=32-34.
-	c.command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: 0}
-
 	err := c.command.Start()
 	if err != nil {
 		t.Fatal(err)
@@ -273,13 +375,7 @@ func (c *command) stop(t *testing.T) {
 	}
 
 	t.Logf("Stop command: %s\n", c.cmd)
-
-	// Here, we just need to send the PID of /bin/sh (which is the same PGID) as
-	// a negative number to syscall.Kill(). As a result, the signal will be
-	// received by all the processes with such PGID, in our case, the process of
-	// /bin/sh and c.cmd.
-	err := syscall.Kill(-c.command.Process.Pid, syscall.SIGTERM)
-
+	err := kill(c.command, c.started)
 	t.Logf("Command returned:\n%s\n%s\n", c.stderr.String(), c.stdout.String())
 
 	if err != nil {
@@ -339,8 +435,10 @@ func generateTestNamespaceName(namespace string) string {
 // name is given as parameter.
 func createTestNamespaceCommand(namespace string) *command {
 	return &command{
-		name:           "Create test namespace",
-		cmd:            fmt.Sprintf("kubectl create ns %s", namespace),
+		name: "Create test namespace",
+		cmd: fmt.Sprintf(`kubectl create namespace %s --dry-run=client -o yaml | \
+			sed  '/^metadata:/a\ \ labels: {"%s":"%s"}' | kubectl apply -f - `,
+			namespace, namespaceLabelKey, namespaceLabelValue),
 		expectedString: fmt.Sprintf("namespace/%s created\n", namespace),
 	}
 }
@@ -353,6 +451,17 @@ func deleteTestNamespaceCommand(namespace string) *command {
 		cmd:            fmt.Sprintf("kubectl delete ns %s", namespace),
 		expectedString: fmt.Sprintf("namespace \"%s\" deleted\n", namespace),
 		cleanup:        true,
+	}
+}
+
+// deleteRemainingNamespacesCommand returns a command which deletes a namespace whom
+// name is given as parameter.
+func deleteRemainingNamespacesCommand() *command {
+	return &command{
+		name: "Delete remaining test namespace",
+		cmd: fmt.Sprintf("kubectl delete ns -l %s=%s",
+			namespaceLabelKey, namespaceLabelValue),
+		cleanup: true,
 	}
 }
 

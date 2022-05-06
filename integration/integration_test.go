@@ -19,7 +19,9 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -29,7 +31,10 @@ const (
 	K8sDistroMinikubeGH = "minikube-github"
 )
 
-var supportedK8sDistros = []string{K8sDistroARO, K8sDistroMinikubeGH}
+var (
+	supportedK8sDistros = []string{K8sDistroARO, K8sDistroMinikubeGH}
+	cancelling          = false
+)
 
 var (
 	integration = flag.Bool("integration", false, "run integration tests")
@@ -75,9 +80,41 @@ func runCommands(cmds []*command, t *testing.T) {
 	}
 }
 
+func cleanupFunc(cleanupDone chan bool, cleanupCommands []*command) {
+	if cancelling {
+		// Wait until the other call of cleanupFunc() is done.
+		<-cleanupDone
+		return
+	}
+
+	cancelling = true
+	fmt.Println("Cleaning up...")
+
+	// We don't want to wait for each cleanup command to finish before
+	// running the next one because in the case the workflow run is
+	// cancelled, we have few seconds (7.5s + 2.5s) before the runner kills
+	// the entire process tree. Therefore, let's try to, at least, launch
+	// the cleanup process in the cluster:
+	// https://docs.github.com/en/actions/managing-workflow-runs/canceling-a-workflow#steps-github-takes-to-cancel-a-workflow-run
+	for _, cmd := range cleanupCommands {
+		err := cmd.startWithoutTest()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: Error: %s\n", cmd.name, err)
+		}
+	}
+
+	for _, cmd := range cleanupCommands {
+		err := cmd.waitWithoutTest()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: Error: %s\n", cmd.name, err)
+		}
+	}
+
+	cleanupDone <- true
+}
+
 func testMain(m *testing.M) int {
 	flag.Parse()
-
 	if !*integration {
 		fmt.Println("Skipping integration test.")
 		return 0
@@ -113,16 +150,12 @@ func testMain(m *testing.M) int {
 	fmt.Printf("using random seed: %d\n", seed)
 
 	initCommands := []*command{}
-
-	if !*doNotDeploySPO {
-		initCommands = append(initCommands, deploySPO)
-		defer func() {
-			fmt.Printf("Clean SPO:\n")
-			cleanupSPO.runWithoutTest()
-		}()
-	}
+	cleanupCommands := []*command{deleteRemainingNamespacesCommand()}
 
 	if !*doNotDeployIG {
+		initCommands = append(initCommands, deployInspektorGadget)
+		initCommands = append(initCommands, waitUntilInspektorGadgetPodsDeployed)
+
 		initialDelay := 15
 		if *k8sDistro == K8sDistroARO {
 			// ARO and any other Kubernetes distribution that uses Red Hat
@@ -131,28 +164,78 @@ func testMain(m *testing.M) int {
 			// gadget-container/entrypoint.sh.
 			initialDelay = 60
 		}
-
-		initCommands = append(initCommands, deployInspektorGadget)
-		initCommands = append(initCommands, waitUntilInspektorGadgetPodsDeployed)
 		initCommands = append(initCommands, waitUntilInspektorGadgetPodsInitialized(initialDelay))
 
-		// defer the cleanup to be sure it's called if the test
-		// fails (hence calling runtime.Goexit())
-		defer func() {
-			fmt.Printf("Clean inspektor-gadget:\n")
-			cleanupInspektorGadget.runWithoutTest()
-		}()
+		cleanupCommands = append(cleanupCommands, cleanupInspektorGadget)
 	}
 
+	if !*doNotDeploySPO {
+		initCommands = append(initCommands, deploySPO)
+		cleanupCommands = append(cleanupCommands, cleanupSPO)
+	}
+
+	initDone := make(chan bool, 1)
+	cleanupDone := make(chan bool, 1)
+
+	cancel := make(chan os.Signal, 1)
+	signal.Notify(cancel, syscall.SIGINT)
+
+	go func() {
+		handled := false
+
+		for {
+			<-cancel
+			fmt.Printf("\nHandling cancellation...\n")
+
+			if handled {
+				fmt.Println("Warn: Forcing cancellation")
+				os.Exit(1)
+			}
+			handled = true
+
+			go func() {
+				// Start by stopping the init commands (in the case they are
+				// still running) to avoid trying to undeploy resources that are
+				// being deployed.
+				fmt.Println("Stop possible ongoing operations...")
+				for _, cmd := range initCommands {
+					err := cmd.killWithoutTest()
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "%s: Error: %s\n", cmd.name, err)
+					}
+				}
+
+				// Wait until init commands have exited before starting the
+				// cleanup.
+				<-initDone
+
+				cleanupFunc(cleanupDone, cleanupCommands)
+				os.Exit(-1)
+			}()
+		}
+	}()
+
+	defer cleanupFunc(cleanupDone, cleanupCommands)
+
 	fmt.Printf("Running init commands:\n")
+
+	done := true
 	for _, cmd := range initCommands {
 		err := cmd.runWithoutTest()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "%v\n", err)
-			return -1
+			fmt.Fprintf(os.Stderr, "%s: Error: %s\n", cmd.name, err)
+			done = false
+			break
 		}
 	}
 
+	// Unblock cancelling handler before exiting
+	initDone <- done
+	if !done {
+		return -1
+	}
+
+	fmt.Printf("Start running tests:\n")
 	return m.Run()
 }
 
