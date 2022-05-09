@@ -62,6 +62,8 @@ type ContainersMap struct {
 	// exposing container details for each mount namespace.
 	containersMap *ebpf.Map
 
+	coll *ebpf.Collection
+
 	pinPath string
 }
 
@@ -91,6 +93,7 @@ func NewContainersMap(pinPath string) (*ContainersMap, error) {
 	return &ContainersMap{
 		containersMap: m,
 		pinPath:       pinPath,
+		coll:          coll,
 	}, nil
 }
 
@@ -139,4 +142,5 @@ func (cm *ContainersMap) Close() {
 		return
 	}
 	os.Remove(filepath.Join(cm.pinPath, BPFMapName))
+	cm.coll.Close()
 }

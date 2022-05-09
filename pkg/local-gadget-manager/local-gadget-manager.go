@@ -362,3 +362,8 @@ func NewManager(runtimes []*containerutils.RuntimeConfig) (*LocalGadgetManager, 
 
 	return l, nil
 }
+
+func (l *LocalGadgetManager) Close() {
+	l.ContainerCollectionClose()
+	l.containersMap.Close()
+}

@@ -69,6 +69,9 @@ type RuncNotifier struct {
 	// Value: dummy struct
 	containers map[string]struct{}
 	mu         sync.Mutex
+
+	// set to true when RuncNotifier is closed
+	closed bool
 }
 
 // runcPaths is the list of paths where runc could be installed. Depending on
@@ -89,7 +92,7 @@ var runcPaths = []string{
 
 // initFanotify initializes the fanotify API with the flags we need
 func initFanotify() (*fanotify.NotifyFD, error) {
-	fanotifyFlags := uint(unix.FAN_CLOEXEC | unix.FAN_CLASS_CONTENT | unix.FAN_UNLIMITED_QUEUE | unix.FAN_UNLIMITED_MARKS)
+	fanotifyFlags := uint(unix.FAN_CLOEXEC | unix.FAN_CLASS_CONTENT | unix.FAN_UNLIMITED_QUEUE | unix.FAN_UNLIMITED_MARKS | unix.FAN_NONBLOCK)
 	openFlags := os.O_RDONLY | unix.O_LARGEFILE | unix.O_CLOEXEC
 	return fanotify.Initialize(fanotifyFlags, openFlags)
 }
@@ -199,6 +202,9 @@ func (n *RuncNotifier) watchContainerTermination(containerID string, containerPI
 	defer unix.Close(pidfd)
 
 	for {
+		if n.closed {
+			return
+		}
 		fds := []unix.PollFd{
 			{
 				Fd:      int32(pidfd),
@@ -206,7 +212,7 @@ func (n *RuncNotifier) watchContainerTermination(containerID string, containerPI
 				Revents: 0,
 			},
 		}
-		count, err := unix.Poll(fds, -1)
+		count, err := unix.Poll(fds, 1000)
 		if err == nil && count == 1 {
 			n.callback(ContainerEvent{
 				Type:         EventTypeRemoveContainer,
@@ -228,6 +234,9 @@ func (n *RuncNotifier) watchContainerTerminationFallback(containerID string, con
 	}()
 
 	for {
+		if n.closed {
+			return
+		}
 		time.Sleep(time.Second)
 		process, err := os.FindProcess(containerPID)
 		if err == nil {
@@ -374,8 +383,12 @@ func (n *RuncNotifier) monitorRuncInstance(bundleDir string, pidFile string) err
 	go func() {
 		for {
 			stop, err := n.watchPidFileIterate(pidFileDirNotify, bundleDir, pidFile, pidFileDir)
+			if n.closed {
+				pidFileDirNotify.File.Close()
+				return
+			}
 			if err != nil {
-				log.Errorf("error: %v\n", err)
+				log.Errorf("error watching pid: %v\n", err)
 			}
 			if stop {
 				pidFileDirNotify.File.Close()
@@ -390,8 +403,12 @@ func (n *RuncNotifier) monitorRuncInstance(bundleDir string, pidFile string) err
 func (n *RuncNotifier) watchRunc() {
 	for {
 		stop, err := n.watchRuncIterate()
+		if n.closed {
+			n.runcBinaryNotify.File.Close()
+			return
+		}
 		if err != nil {
-			log.Errorf("error: %v\n", err)
+			log.Errorf("error watching runc: %v\n", err)
 		}
 		if stop {
 			n.runcBinaryNotify.File.Close()
@@ -467,9 +484,19 @@ func (n *RuncNotifier) watchRuncIterate() (bool, error) {
 	if createFound && bundleDir != "" && pidFile != "" {
 		err := n.monitorRuncInstance(bundleDir, pidFile)
 		if err != nil {
-			log.Errorf("error: %v\n", err)
+			log.Errorf("error monitoring runc instance: %v\n", err)
 		}
 	}
 
 	return false, nil
+}
+
+func (n *RuncNotifier) Close() {
+	n.closed = true
+	n.runcBinaryNotify.File.Close()
+
+	// do not return until all go routines are done
+	for len(n.containers) != 0 {
+		time.Sleep(100 * time.Millisecond)
+	}
 }

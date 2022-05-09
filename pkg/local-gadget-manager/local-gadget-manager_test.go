@@ -48,6 +48,8 @@ func TestBasic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start local gadget manager: %s", err)
 	}
+	defer localGadgetManager.Close()
+
 	gadgets := localGadgetManager.ListGadgets()
 	if len(gadgets) == 0 {
 		t.Fatalf("Failed to get any gadgets")
@@ -159,6 +161,26 @@ func checkFdList(t *testing.T, initialFdList string, attempts int, sleep time.Du
 	}
 }
 
+// TestClose tests that resources aren't leaked after calling Close()
+func TestClose(t *testing.T) {
+	if !*rootTest {
+		t.Skip("skipping test requiring root.")
+	}
+
+	initialFdList := currentFdList(t)
+
+	localGadgetManager, err := NewManager([]*containerutils.RuntimeConfig{{Name: "docker"}})
+	if err != nil {
+		t.Fatalf("Failed to start local gadget manager: %s", err)
+	}
+
+	localGadgetManager.Close()
+
+	// We need a quite long try period here because the runc
+	// notifier takes a bit long to release all resources
+	checkFdList(t, initialFdList, 5, 100*time.Millisecond)
+}
+
 func TestSeccomp(t *testing.T) {
 	if !*rootTest {
 		t.Skip("skipping test requiring root.")
@@ -167,6 +189,7 @@ func TestSeccomp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start local gadget manager: %s", err)
 	}
+	defer localGadgetManager.Close()
 
 	initialFdList := currentFdList(t)
 
@@ -213,6 +236,7 @@ func TestAuditSeccomp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start local gadget manager: %s", err)
 	}
+	defer localGadgetManager.Close()
 
 	initialFdList := currentFdList(t)
 
@@ -260,6 +284,7 @@ func TestDNS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start local gadget manager: %s", err)
 	}
+	defer localGadgetManager.Close()
 
 	initialFdList := currentFdList(t)
 
@@ -371,6 +396,7 @@ func TestCollector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to start local gadget manager: %s", err)
 	}
+	defer localGadgetManager.Close()
 
 	err = localGadgetManager.AddTracer("socket-collector", "my-tracer1", "my-container", "Status")
 	if err != nil {
